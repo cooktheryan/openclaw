@@ -26,8 +26,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  DOCKERHUB_REGISTRY: docker.io
-  DOCKERHUB_IMAGE_NAME: openclaw/openclaw
 
 jobs:
   validate_manual_backfill:
@@ -69,30 +67,12 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: echo "Approved Docker backfill for $RELEASE_TAG"
 
-  validate_publish_config:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Validate Docker Hub publish credentials
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${DOCKERHUB_USERNAME}" || -z "${DOCKERHUB_TOKEN}" ]]; then
-            echo "::error::Docker Hub publishing requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets."
-            exit 1
-          fi
-          echo "Docker Hub publishing configured for ${DOCKERHUB_IMAGE}."
-
   # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
   # Build amd64 image. Default and slim tags point to the same slim runtime.
   build-amd64:
-    needs: [approve_manual_backfill, validate_publish_config]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_manual_backfill]
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
     permissions:
@@ -138,26 +118,18 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Resolve image tags (amd64)
         id: tags
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
           tags=()
           slim_tags=()
           browser_tags=()
-          images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")
+          images=("${GHCR_IMAGE}")
           browser_supported=0
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
@@ -313,8 +285,8 @@ jobs:
 
   # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
-    needs: [approve_manual_backfill, validate_publish_config]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_manual_backfill]
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -341,26 +313,18 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Resolve image tags (arm64)
         id: tags
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
           tags=()
           slim_tags=()
           browser_tags=()
-          images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")
+          images=("${GHCR_IMAGE}")
           browser_supported=0
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
@@ -516,8 +480,8 @@ jobs:
 
   # Create multi-platform manifests
   create-manifest:
-    needs: [approve_manual_backfill, validate_publish_config, build-amd64, build-arm64]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_manual_backfill, build-amd64, build-arm64]
+    if: ${{ always() && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
     permissions:
@@ -537,19 +501,11 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Resolve manifest tags
         id: tags
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
@@ -557,9 +513,6 @@ jobs:
           tags=()
           slim_tags=()
           browser_tags=()
-          dockerhub_tags=()
-          dockerhub_slim_tags=()
-          dockerhub_browser_tags=()
           browser_supported=0
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
@@ -568,22 +521,16 @@ jobs:
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${GHCR_IMAGE}:${version}")
             slim_tags+=("${GHCR_IMAGE}:${version}-slim")
-            dockerhub_tags+=("${DOCKERHUB_IMAGE}:${version}")
-            dockerhub_slim_tags+=("${DOCKERHUB_IMAGE}:${version}-slim")
             if [[ "${browser_supported}" == "1" ]]; then
               browser_tags+=("${GHCR_IMAGE}:${version}-browser")
-              dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${version}-browser")
             fi
             # Beta releases and manual backfills publish only immutable version tags;
             # do not advance latest/main aliases from those flows.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               tags+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
               slim_tags+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
-              dockerhub_tags+=("${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:main")
-              dockerhub_slim_tags+=("${DOCKERHUB_IMAGE}:slim" "${DOCKERHUB_IMAGE}:main-slim")
               if [[ "${browser_supported}" == "1" ]]; then
                 browser_tags+=("${GHCR_IMAGE}:latest-browser" "${GHCR_IMAGE}:main-browser")
-                dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:latest-browser" "${DOCKERHUB_IMAGE}:main-browser")
               fi
             fi
           fi
@@ -598,23 +545,14 @@ jobs:
             echo "browser<<EOF"
             printf "%s\n" "${browser_tags[@]}"
             echo "EOF"
-            echo "dockerhub<<EOF"
-            printf "%s\n" "${dockerhub_tags[@]}" "${dockerhub_slim_tags[@]}"
-            echo "EOF"
-            echo "dockerhub_browser<<EOF"
-            printf "%s\n" "${dockerhub_browser_tags[@]}"
-            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create and push manifest
         shell: bash
         env:
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           TAGS: ${{ steps.tags.outputs.value }}
           BROWSER_TAGS: ${{ steps.tags.outputs.browser }}
-          DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}
-          DOCKERHUB_BROWSER_TAGS: ${{ steps.tags.outputs.dockerhub_browser }}
           AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
           ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
           AMD64_BROWSER_DIGEST: ${{ needs.build-amd64.outputs.browser_digest }}
@@ -623,8 +561,6 @@ jobs:
           set -euo pipefail
           mapfile -t tags <<< "${TAGS}"
           mapfile -t browser_tags <<< "${BROWSER_TAGS}"
-          mapfile -t dockerhub_tags <<< "${DOCKERHUB_TAGS}"
-          mapfile -t dockerhub_browser_tags <<< "${DOCKERHUB_BROWSER_TAGS}"
           create_manifest() {
             local amd64_digest="$1"
             local arm64_digest="$2"
@@ -637,20 +573,8 @@ jobs:
             docker buildx imagetools create "${args[@]}" "$amd64_digest" "$arm64_digest"
           }
           create_manifest "${AMD64_DIGEST}" "${ARM64_DIGEST}" "${tags[@]}"
-          if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
-            echo "::error::No Docker Hub source refs resolved for ref ${SOURCE_REF}"
-            exit 1
-          fi
-          version="${SOURCE_REF#refs/tags/v}"
-          create_manifest "${DOCKERHUB_IMAGE}:${version}-amd64" "${DOCKERHUB_IMAGE}:${version}-arm64" "${dockerhub_tags[@]}"
           if [[ -n "${BROWSER_TAGS}" ]]; then
             create_manifest "${AMD64_BROWSER_DIGEST}" "${ARM64_BROWSER_DIGEST}" "${browser_tags[@]}"
-          fi
-          if [[ -n "${DOCKERHUB_BROWSER_TAGS}" ]]; then
-            create_manifest \
-              "${DOCKERHUB_IMAGE}:${version}-browser-amd64" \
-              "${DOCKERHUB_IMAGE}:${version}-browser-arm64" \
-              "${dockerhub_browser_tags[@]}"
           fi
 
   verify-attestations:
@@ -680,19 +604,11 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Resolve image refs
         id: refs
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
@@ -701,10 +617,6 @@ jobs:
           slim_multi_refs=()
           amd64_refs=()
           arm64_refs=()
-          dockerhub_multi_refs=()
-          dockerhub_slim_multi_refs=()
-          dockerhub_amd64_refs=()
-          dockerhub_arm64_refs=()
           browser_supported=0
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             tag="${SOURCE_REF#refs/tags/}"
@@ -719,46 +631,30 @@ jobs:
             version="${SOURCE_REF#refs/tags/v}"
             multi_refs+=("${GHCR_IMAGE}:${version}")
             slim_multi_refs+=("${GHCR_IMAGE}:${version}-slim")
-            dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${version}")
-            dockerhub_slim_multi_refs+=("${DOCKERHUB_IMAGE}:${version}-slim")
             amd64_refs+=(
               "${GHCR_IMAGE}:${version}-amd64"
               "${GHCR_IMAGE}:${version}-slim-amd64"
-            )
-            dockerhub_amd64_refs+=(
-              "${DOCKERHUB_IMAGE}:${version}-amd64"
-              "${DOCKERHUB_IMAGE}:${version}-slim-amd64"
             )
             arm64_refs+=(
               "${GHCR_IMAGE}:${version}-arm64"
               "${GHCR_IMAGE}:${version}-slim-arm64"
             )
-            dockerhub_arm64_refs+=(
-              "${DOCKERHUB_IMAGE}:${version}-arm64"
-              "${DOCKERHUB_IMAGE}:${version}-slim-arm64"
-            )
             if [[ "${browser_supported}" == "1" ]]; then
               multi_refs+=("${GHCR_IMAGE}:${version}-browser")
-              dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${version}-browser")
               amd64_refs+=("${GHCR_IMAGE}:${version}-browser-amd64")
-              dockerhub_amd64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-amd64")
               arm64_refs+=("${GHCR_IMAGE}:${version}-browser-arm64")
-              dockerhub_arm64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-arm64")
             fi
             # Beta releases and manual backfills publish only immutable version tags;
             # do not advance latest/main aliases from those flows.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               multi_refs+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
               slim_multi_refs+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
-              dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:main")
-              dockerhub_slim_multi_refs+=("${DOCKERHUB_IMAGE}:slim" "${DOCKERHUB_IMAGE}:main-slim")
               if [[ "${browser_supported}" == "1" ]]; then
                 multi_refs+=("${GHCR_IMAGE}:latest-browser" "${GHCR_IMAGE}:main-browser")
-                dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:latest-browser" "${DOCKERHUB_IMAGE}:main-browser")
               fi
             fi
           fi
-          if [[ ${#multi_refs[@]} -eq 0 || ${#amd64_refs[@]} -eq 0 || ${#arm64_refs[@]} -eq 0 || ${#dockerhub_multi_refs[@]} -eq 0 || ${#dockerhub_amd64_refs[@]} -eq 0 || ${#dockerhub_arm64_refs[@]} -eq 0 ]]; then
+          if [[ ${#multi_refs[@]} -eq 0 || ${#amd64_refs[@]} -eq 0 || ${#arm64_refs[@]} -eq 0 ]]; then
             echo "::error::No Docker image refs resolved for ref ${SOURCE_REF}"
             exit 1
           fi
@@ -775,15 +671,6 @@ jobs:
             echo "arm64<<EOF"
             printf "%s\n" "${arm64_refs[@]}"
             echo "EOF"
-            echo "dockerhub_multi<<EOF"
-            printf "%s\n" "${dockerhub_multi_refs[@]}" "${dockerhub_slim_multi_refs[@]}"
-            echo "EOF"
-            echo "dockerhub_amd64<<EOF"
-            printf "%s\n" "${dockerhub_amd64_refs[@]}"
-            echo "EOF"
-            echo "dockerhub_arm64<<EOF"
-            printf "%s\n" "${dockerhub_arm64_refs[@]}"
-            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify Docker attestations
@@ -792,17 +679,11 @@ jobs:
           MULTI_REFS: ${{ steps.refs.outputs.multi }}
           AMD64_REFS: ${{ steps.refs.outputs.amd64 }}
           ARM64_REFS: ${{ steps.refs.outputs.arm64 }}
-          DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}
-          DOCKERHUB_AMD64_REFS: ${{ steps.refs.outputs.dockerhub_amd64 }}
-          DOCKERHUB_ARM64_REFS: ${{ steps.refs.outputs.dockerhub_arm64 }}
         run: |
           set -euo pipefail
           mapfile -t multi_refs <<< "${MULTI_REFS}"
           mapfile -t amd64_refs <<< "${AMD64_REFS}"
           mapfile -t arm64_refs <<< "${ARM64_REFS}"
-          mapfile -t dockerhub_multi_refs <<< "${DOCKERHUB_MULTI_REFS}"
-          mapfile -t dockerhub_amd64_refs <<< "${DOCKERHUB_AMD64_REFS}"
-          mapfile -t dockerhub_arm64_refs <<< "${DOCKERHUB_ARM64_REFS}"
 
           node scripts/verify-docker-attestations.mjs \
             --platform linux/amd64 \
@@ -814,16 +695,6 @@ jobs:
           node scripts/verify-docker-attestations.mjs \
             --platform linux/arm64 \
             "${arm64_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/amd64 \
-            --platform linux/arm64 \
-            "${dockerhub_multi_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/amd64 \
-            "${dockerhub_amd64_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/arm64 \
-            "${dockerhub_arm64_refs[@]}"
 
       - name: Set up Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
@@ -836,12 +707,10 @@ jobs:
         shell: bash
         env:
           MULTI_REFS: ${{ steps.refs.outputs.multi }}
-          DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}
         run: |
           set -euo pipefail
           mkdir -p trivy-out
           mapfile -t multi_refs <<< "${MULTI_REFS}"
-          mapfile -t dockerhub_multi_refs <<< "${DOCKERHUB_MULTI_REFS}"
           scan_labels=()
           scan_refs=()
           scan_platforms=()
@@ -893,8 +762,6 @@ jobs:
           }
           append_scan_refs "ghcr" "amd64" "linux/amd64" "${multi_refs[@]}"
           append_scan_refs "ghcr" "arm64" "linux/arm64" "${multi_refs[@]}"
-          append_scan_refs "dockerhub" "amd64" "linux/amd64" "${dockerhub_multi_refs[@]}"
-          append_scan_refs "dockerhub" "arm64" "linux/arm64" "${dockerhub_multi_refs[@]}"
           if [[ ${#scan_refs[@]} -eq 0 ]]; then
             echo "::error::No Docker image refs resolved for Trivy scan"
             exit 1
@@ -969,60 +836,6 @@ jobs:
         with:
           sarif_file: trivy-out/browser-arm64.sarif
           category: trivy-docker-release-browser-arm64
-          ref: ${{ steps.refs.outputs.source_ref }}
-          sha: ${{ steps.refs.outputs.source_sha }}
-
-      - name: Upload Trivy Docker Hub runtime amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('trivy-out/dockerhub-runtime-amd64.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        with:
-          sarif_file: trivy-out/dockerhub-runtime-amd64.sarif
-          category: trivy-docker-release-dockerhub-runtime-amd64
-          ref: ${{ steps.refs.outputs.source_ref }}
-          sha: ${{ steps.refs.outputs.source_sha }}
-
-      - name: Upload Trivy Docker Hub runtime arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('trivy-out/dockerhub-runtime-arm64.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        with:
-          sarif_file: trivy-out/dockerhub-runtime-arm64.sarif
-          category: trivy-docker-release-dockerhub-runtime-arm64
-          ref: ${{ steps.refs.outputs.source_ref }}
-          sha: ${{ steps.refs.outputs.source_sha }}
-
-      - name: Upload Trivy Docker Hub slim amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('trivy-out/dockerhub-slim-amd64.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        with:
-          sarif_file: trivy-out/dockerhub-slim-amd64.sarif
-          category: trivy-docker-release-dockerhub-slim-amd64
-          ref: ${{ steps.refs.outputs.source_ref }}
-          sha: ${{ steps.refs.outputs.source_sha }}
-
-      - name: Upload Trivy Docker Hub slim arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('trivy-out/dockerhub-slim-arm64.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        with:
-          sarif_file: trivy-out/dockerhub-slim-arm64.sarif
-          category: trivy-docker-release-dockerhub-slim-arm64
-          ref: ${{ steps.refs.outputs.source_ref }}
-          sha: ${{ steps.refs.outputs.source_sha }}
-
-      - name: Upload Trivy Docker Hub browser amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('trivy-out/dockerhub-browser-amd64.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        with:
-          sarif_file: trivy-out/dockerhub-browser-amd64.sarif
-          category: trivy-docker-release-dockerhub-browser-amd64
-          ref: ${{ steps.refs.outputs.source_ref }}
-          sha: ${{ steps.refs.outputs.source_sha }}
-
-      - name: Upload Trivy Docker Hub browser arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('trivy-out/dockerhub-browser-arm64.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        with:
-          sarif_file: trivy-out/dockerhub-browser-arm64.sarif
-          category: trivy-docker-release-dockerhub-browser-arm64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
